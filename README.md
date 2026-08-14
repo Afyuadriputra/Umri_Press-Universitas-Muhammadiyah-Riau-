@@ -1,17 +1,32 @@
-# Ringkasan Eksekutif Arsitektur
+# UMRI Press - Sistem Informasi Penerbitan & E-Office
 
-Sistem ini dibangun di atas **Laravel 11** dan menggunakan perpaduan pola **Action-Domain & Observer Pattern** untuk menangani proses transaksi otomatis, serta sistem **Fine-Grained Dynamic RBAC (Role-Based Access Control)** yang memisahkan izin ke dalam 3 modul utama^^.
+UMRI Press adalah platform berbasis web terintegrasi yang dirancang untuk mengelola ekosistem penerbitan buku di Universitas Muhammadiyah Riau. Sistem ini mencakup toko buku digital (*E-Commerce*), portal manajemen royalti penulis otomatis, serta sistem tata kelola persuratan digital (*E-Office*) yang dilengkapi alur disposisi dan pelacakan audit terperinci.
 
-Sistem backend terbagi menjadi  **3 Domain Bisnis Utama** :
+---
 
-1. **E-Commerce & Penerbitan Buku (Katalog Publik, Direct Order, Preview Generator)**
-   ^^
-2. **Finansial & Portal Royalti Penulis (Royalty Automation & Payout)**
-   ^^
-3. **E-Office & Tata Kelola Persuratan Digital (Incoming/Outgoing Letter, Disposisi, Template Engine, & Audit Log)**
-   ^^
+## 1. Ringkasan Eksekutif Arsitektur
 
-## 2. Analisis Modul & Alur Bisnis (Business Workflows)
+Sistem ini dibangun di atas **Laravel 11** dan mengimplementasikan arsitektur modular yang menggabungkan pola **Action-Domain & Observer Pattern** untuk menangani proses transaksi otomatis. Keamanan sistem dikawal oleh arsitektur **Fine-Grained Dynamic RBAC (Role-Based Access Control)** yang memisahkan izin akses ke dalam 3 domain bisnis utama:
+
+1. **E-Commerce & Penerbitan Buku**: Manajemen katalog buku publik, pemesanan langsung (*Direct Order*), artikel, dan generator pratinjau PDF.
+2. **Finansial & Portal Royalti Penulis**: Otomatisasi perhitungan royalti per buku, dasbor mutasi kredit/debit, dan alur pencairan (*payout*).
+3. **E-Office & Tata Kelola Persuratan Digital**: Manajemen surat masuk, surat keluar otomatis, alur disposisi multi-penerima, mesin templat dinamis, jejak audit (*Audit Log*), dan verifikasi publik.
+
+---
+
+## 2. Tumpukan Teknologi (Tech Stack)
+
+* **Bahasa Pemrograman**: PHP ^8.2
+* **Kerangka Kerja Backend**: Laravel ^11.31
+* **Komponen Reaktif UI**: Livewire ^3.4 & Livewire Volt ^1.0
+* **Manipulasi Dokumen PDF**: `setasign/fpdf` (^1.8) & `setasign/fpdi` (^2.6)
+* **Basis Data**: Kompatibel dengan SQLite, MySQL, dan PostgreSQL via *database-agnostic queries*
+
+---
+
+## 3. Analisis Alur Bisnis (Business Workflows)
+
+### A. Alur Transaksi & Otomatisasi Royalti Penulis (E-Commerce Domain)
 
 ```
                        ┌───────────────────────────────┐
@@ -42,26 +57,41 @@ Sistem backend terbagi menjadi  **3 Domain Bisnis Utama** :
                        ┌───────────────────────────────┐
                        │ PayoutRequest & Debit Balance │
                        └───────────────────────────────┘
+
 ```
 
-### A. Alur Transaksi & Automasi Royalti Penulis (E-Commerce Domain)
+1. **Pemesanan Buku (`DirectOrder`)**:
 
-1. **Pemesanan Buku (`DirectOrder`):**
-   * Konsumen memesan buku fisik/digital melalui form order langsung^^.
-   * Model `Buku` memiliki kalkulasi dinamis untuk diskon hardcover dan softcover via Accessor (`harga_setelah_diskon` & `harga_soft_setelah_diskon`).
-2. **Event Trigger (`DirectOrderObserver`):**
-   * Saat status pesanan berubah menjadi `DirectOrder::STATUS_COMPLETED` (baik melalui manual admin patch di `DashboardController::updatePesanan` maupun auto trigger), Observer menangkap event `updated`.
-3. **Perhitungan Bagi Hasil (`CalculateRoyaltyAction`):**
-   * Sistem membaca relasi *Many-to-Many* antara `Buku` dan `Authors` yang memiliki pivot `royalty_percentage`.
-   * Menghitung nominal royalti: `round(harga_setelah_diskon * (royalty_percentage / 100), 2)`.
-   * Membuat rekaman `RoyaltyTransaction` dengan tipe `credit` dan status `pending` secara atomik di dalam Database Transaction.
-4. **Penarikan Saldo (`AuthorPayoutController`):**
-   * Penulis hanya bisa menarik saldo jika data rekening lengkap.
-   * **Formula Saldo Tersedia:**
-     $$
-     \text{Available Balance} = \sum \text{Credit}_{\{\text{approved, paid}\}} - \sum \text{Debit}_{\{\text{pending, approved, paid}\}}
-     $$
-   * Mengajukan pencairan secara otomatis mencatat `PayoutRequest` dan membuat transaksi debit penahan saldo.
+* Konsumen memesan buku cetak (*hardcover*/*softcover*) atau digital melalui form pembelian langsung.
+* Model `Buku` memiliki kalkulasi dinamis untuk potongan harga via *Accessor* (`harga_setelah_diskon` & `harga_soft_setelah_diskon`).
+
+2. **Pemicu Event (`DirectOrderObserver`)**:
+
+* Ketika status pesanan diperbarui menjadi `DirectOrder::STATUS_COMPLETED` (baik melalui panel admin maupun otomasi), *Observer* menangkap event `updated`.
+
+3. **Perhitungan Bagi Hasil (`CalculateRoyaltyAction`)**:
+
+* Sistem membaca relasi *Many-to-Many* antara `Buku` dan `Authors` melalui tabel perantara `author_buku` yang menyimpan kolom `royalty_percentage`.
+* Formula perhitungan royalti per penulis:
+
+$$
+\text{Nominal Royalti} = \text{round}\left(\text{harga\_setelah\_diskon} \times \frac{\text{royalty\_percentage}}{100}, 2\right)
+$$
+
+* Sistem membuat rekaman data pada `RoyaltyTransaction` bertipe `credit` dan status `pending` secara atomik di dalam `DB::transaction`.
+
+4. **Penarikan Saldo Penulis (`AuthorPayoutController`)**:
+
+* Penulis hanya dapat mengajukan pencairan jika data perbankan telah dilengkapi pada profil.
+* **Formula Saldo Tersedia (*Available Balance*)**:
+
+$$
+\text{Available Balance} = \sum \text{Credit}_{\{\text{approved, paid}\}} - \sum \text{Debit}_{\{\text{pending, approved, paid}\}}
+$$
+
+* Pengajuan penarikan dana akan membuat entri `PayoutRequest` baru dan sekaligus mencatat mutasi `debit` bertaraf `pending` di `RoyaltyTransaction` untuk menahan saldo aktif.
+
+---
 
 ### B. Alur Tata Kelola Persuratan & Disposisi (E-Office Domain)
 
@@ -70,29 +100,39 @@ Sistem backend terbagi menjadi  **3 Domain Bisnis Utama** :
  │ Surat Masuk/Out │ ────> │ Multi-level CC  │ ────> │  In-App Notice   │
  │   Agenda Gen    │       │   Disposisi     │       │    & Audit Log   │
  └─────────────────┘       └─────────────────┘       └──────────────────┘
+
 ```
 
-1. **Surat Masuk (`IncomingLetterController`):**
-   * **Auto Numbering Agenda:** Nomor agenda dibuat otomatis per tahun takwim dengan padding 4 digit (`0001`, `0002`, dst.).
-   * Mendukung penyimpanan berkas scan fisik (`scan_path`) dan lampiran (`attachment_path`).
-2. **Disposisi Multi-Penerima (`DispositionController`):**
-   * Pimpinan dapat mendisposisikan surat ke staf utama (`role: to`) dan tembusan (`role: cc`).
-   * Setiap disposisi mentrigger `SuratNotification` dan tercatat dalam `AuditLog`.
-   * Saat penerima menyelesaikan disposisi, notifikasi balik dikirim ke pembuat disposisi.
-3. **Surat Keluar & Generator Template (`OutgoingLetterController`):**
-   * **Dynamic Format Generator:** Format nomor surat mendukung placeholder terkonfigurasi:
-     `{sequence}/{instansi}/{jenis}/{unit}/{bulan_roman}/{tahun}`.
-   * **Variable Replacement Engine:** Template surat dapat merender tag dinamis seperti `{{nomor}}`, `{{tanggal}}`, `{{penerima}}`, `{{jabatan}}`, `{{perihal}}`, `{{isi}}`.
-   * **Public Verification QR/Code:** Surat yang keluar menghasilkan kode heksadesimal unik 16 karakter (`generateVerificationCode()`) yang dapat diverifikasi publik tanpa login via `/surat/verify/{code}`^^.
+1. **Surat Masuk (`IncomingLetterController`)**:
 
-### C. Generator Pratinjau Buku (`PdfPreviewGenerator`)
+* **Auto Numbering Agenda**: Nomor agenda surat di-generate otomatis per tahun takwim dengan format padding 4 digit (`0001`, `0002`, dst.).
+* Mendukung manajemen berkas digital untuk hasil pemindaian fisik (`scan_path`) dan lampiran (`attachment_path`).
 
-* Memanfaatkan pustaka `setasign/fpdi` dan `fpdf`^^.
-* Mengambil sejumlah **$N$** halaman awal dari file PDF master buku, menggabungkannya menjadi satu file preview baru di storage publik, dan mencegah kebocoran full-content naskah.
+2. **Disposisi Berjenjang (`DispositionController`)**:
 
-## 3. Sistem Otorisasi & Hak Akses (Security & RBAC Matrix)
+* Pimpinan dapat mendisposisikan surat masuk kepada penerima utama (`role: to`) dan banyak penerima tembusan (`role: cc`) disertai instruksi kerja dan batas waktu (*due date*).
+* Setiap instruksi baru memicu pembuatan notifikasi internal (`SuratNotification`) dan dicatat pada `AuditLog`.
+* Saat status disposisi ditandai `selesai` oleh penerima, sistem mengirimkan notifikasi balik kepada pihak pembuat disposisi.
 
-Sistem menggunakan kontrol hak akses berbasis atribut JSON pada tabel `users` dan fallback ke relasi `roles`:
+3. **Surat Keluar & Mesin Templat (`OutgoingLetterController`)**:
+
+* **Dynamic Format Generator**: Mendukung konfigurasi penomoran surat fleksibel berbasis *placeholder*:
+  `{sequence}/{instansi}/{jenis}/{unit}/{bulan_roman}/{tahun}`
+* **Variable Replacement Engine**: Konten surat dapat disusun menggunakan *template* dengan rendering variabel dinamis (`{{nomor}}`, `{{tanggal}}`, `{{penerima}}`, `{{jabatan}}`, `{{perihal}}`, `{{isi}}`).
+* **Public Verification Code**: Setiap surat keluar yang disetujui menghasilkan token verifikasi heksadesimal unik 16 karakter (`verification_code`) yang dapat divalidasi keasliannya oleh publik tanpa perlu login melalui rute `/surat/verify/{code}`.
+
+---
+
+### C. Generator Pratinjau Naskah (`PdfPreviewGenerator`)
+
+* Memanfaatkan pustaka `setasign/fpdi` dan `fpdf`.
+* Mengambil sejumlah $N$ halaman awal dari file PDF master buku, menggabungkannya secara terisolasi ke direktori penyimpanan publik, dan melindungi integritas seluruh naskah dari unduhan tidak resmi.
+
+---
+
+## 4. Keamanan & Matriks Akses (RBAC Matrix)
+
+Sistem menggunakan hierarki otorisasi dinamis yang membaca izin berbasis JSON pada entitas `users` dan fallback ke relasi tabel `roles`:
 
 ```
                      ┌──────────────────┐
@@ -107,20 +147,31 @@ Sistem menggunakan kontrol hak akses berbasis atribut JSON pada tabel `users` da
                                              │
                                              ├─ YES ──> [Allow]
                                              └─ NO ───> [Deny & Invalidate Session]
+
 ```
 
-### Matriks Hak Akses & Middleware
+### Matriks Middleware & Hak Akses
 
-| **Middleware**                            | **Target Area** | **Cakupan Izin**                                                                             |
-| ----------------------------------------------- | --------------------- | -------------------------------------------------------------------------------------------------- |
-| `IsAdmin`                                     | Root Admin            | Memastikan kolom`role === 'admin'`.                                                              |
-| `EnsureDashboardPermission`                   | Dashboard Utama       | Mengecek`buku.*`,`artikel.*`,`tim.*`,`harga.*`,`transaksi.*`,`royalty.manage`, dll^^.  |
-| `EnsureAuthorPermission`                      | Portal Penulis        | Memeriksa izin penulis (`author.dashboard.view`, pengaturan bank, request pencairan).            |
-| `EnsureSuratAccess`&`EnsureSuratPermission` | Modul Persuratan      | Memeriksa apakah user memiliki akses ke persuratan (`can_access_surat`) dan permission per aksi. |
+| Middleware  | Target Area     | Cakupan Izin                            |
+| ----------- | --------------- | --------------------------------------- |
+| `IsAdmin` | Pengaturan Root | Memastikan atribut`role === 'admin'`. |
 
-> **Catatan Keamanan:** Middleware di sistem ini menerapkan tindakan defensif ketat: jika user yang login gagal melewati guard permission, session langsung di-invalidate dan di-logout otomatis (`Auth::logout()`).
+ |
+| `EnsureDashboardPermission` | Dasbor Utama | Validasi izin granular per fitur (`buku.*`, `artikel.*`, `tim.*`, `harga.*`, `transaksi.*`, `royalty.manage`, dll.).
 
-## 4. Struktur Relasi Database (Entity Relationships)
+ |
+| `EnsureAuthorPermission` | Portal Penulis | Memeriksa izin penulis (`author.dashboard.view`, pengaturan bank, penarikan royalti).
+
+ |
+| `EnsureSuratAccess` & `EnsureSuratPermission` | Modul Persuratan | Memeriksa apakah user memiliki akses persuratan (`can_access_surat`) dan permission granular terkait.
+
+ |
+
+> **Catatan Keamanan**: Middleware menerapkan kebijakan *zero-tolerance*: jika pengguna yang terautentikasi mencoba mengakses rute di luar batas izinnya, sistem akan melakukan *force-logout* serta menginvalitkan sesi dan token CSRF secara otomatis.
+
+---
+
+## 5. Struktur Relasi Basis Data (Entity Relationships)
 
 ```
   [User] 1 ────── 1 [Authors] 1 ────── N [AuthorBuku] N ────── 1 [Buku]
@@ -129,17 +180,73 @@ Sistem menggunakan kontrol hak akses berbasis atribut JSON pada tabel `users` da
     ├─ 1:N ── [SuratNotification]                                 └─ 1:N ── [DirectOrder]
     ├─ 1:N ── [IncomingLetter] 1 ── N [Disposition] 1 ── N [DispositionRecipient]
     └─ 1:N ── [OutgoingLetter]
+
 ```
 
-* **User **$\leftrightarrow$** Authors **$\leftrightarrow$** Buku:** Relasi polimorfik/pivot yang memungkinkan 1 buku ditulis oleh banyak penulis (`author_buku`) dengan pembagian persentase royalti yang fleksibel.
-* **DirectOrder **$\leftrightarrow$** RoyaltyTransaction:** Setiap pesanan sukses (`DirectOrder`) yang melibatkan penulis terhubung langsung ke mutasi kredit royalti.
-* **IncomingLetter **$\leftrightarrow$** Disposition **$\leftrightarrow$** DispositionRecipient:** Relasi 1-ke-banyak berjenjang untuk mendistribusikan surat ke banyak staf/pejabat sekaligus.
+* **User $\leftrightarrow$ Authors $\leftrightarrow$ Buku**: Relasi *Many-to-Many* melalui tabel pivot `author_buku` yang memungkinkan sebuah buku disusun oleh banyak penulis dengan porsi royalti yang berbeda.
+* **DirectOrder $\leftrightarrow$ RoyaltyTransaction**: Setiap pesanan langsung berstatus `completed` menghasilkan mutasi kredit royalti ke akun penulis terkait.
+* **IncomingLetter $\leftrightarrow$ Disposition $\leftrightarrow$ DispositionRecipient**: Relasi berjenjang yang memungkinkan satu surat masuk didisposisikan ke beberapa staf internal secara bersamaan.
 
-## 5. Ringkasan Kunci untuk Kebutuhan Dokumentasi (README)
+---
 
-1. **Stack Inti:** Laravel 11, SQLite/MySQL support, Livewire + Volt, FPDI/FPDF^^.
-2. **Karakteristik Backend:**
-   * Database-agnostic monthly reporting queries (`strftime` untuk SQLite, `DATE_FORMAT` untuk MySQL, `to_char` untuk PostgreSQL).
-   * Transaksi finansial atomik (`DB::transaction`).
-   * Audit trail lengkap pada domain persuratan (`AuditLog`).
-   * Integrasi file stream untuk ekspor CSV dan PDF Agenda Surat.
+## 6. Karakteristik Backend Unggulan
+
+* **Database-Agnostic Reporting**: Agregasi data laporan bulanan kompatibel lintas DBMS (`strftime` untuk SQLite, `DATE_FORMAT` untuk MySQL, dan `to_char` untuk PostgreSQL).
+* **Transaksi Finansial Atomik**: Seluruh proses kredit dan debit royalti dieksekusi di dalam blok `DB::transaction` untuk mencegah inkonsistensi data saldo.
+* **Jejak Audit Komprehensif**: Pencatatan histori perubahan status surat, mutasi templat, dan unit kerja melalui model `AuditLog`.
+* **Ekspor Data Stream**: Ekspor buku agenda surat masuk/keluar ke format CSV dan PDF cetak menggunakan *stream response* efisien memori.
+
+---
+
+## 7. Panduan Instalasi Lokal
+
+Ikuti langkah-langkah berikut untuk mengonfigurasi proyek di lingkungan lokal:
+
+**1. Kloning Repositori**
+
+```bash
+git clone <url-repositori-anda>
+cd Umri_Press-Universitas-Muhammadiyah-Riau-
+
+```
+
+**2. Instalasi Dependensi**
+
+```bash
+composer install
+npm install
+
+```
+
+**3. Konfigurasi Environment**
+
+```bash
+cp .env.example .env
+php artisan key:generate
+
+```
+
+**4. Migrasi Basis Data & Storage Link**
+
+```bash
+php artisan migrate
+php artisan storage:link
+
+```
+
+**5. Menjalankan Aplikasi**
+Gunakan skrip dev bawaan untuk menjalankan web server, database queue worker, dan aset Vite secara simultan:
+
+```bash
+composer dev
+
+```
+
+Atau jalankan secara terpisah melalui terminal:
+
+```bash
+php artisan serve
+npm run dev
+php artisan queue:listen
+
+```
